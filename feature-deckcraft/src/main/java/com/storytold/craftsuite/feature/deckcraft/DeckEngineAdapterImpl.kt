@@ -51,6 +51,7 @@ class DeckEngineAdapterImpl(initialTitle: String = "Untitled Presentation") : De
         if (NativeEngineBridge.isNativeLoaded) {
             try {
                 NativeEngineBridge.nativeResetSession("deck")
+                NativeEngineBridge.nativeExecuteTool("deck", "new_presentation", "{}")
             } catch (e: Exception) {
                 // native fallback
             }
@@ -73,6 +74,15 @@ class DeckEngineAdapterImpl(initialTitle: String = "Untitled Presentation") : De
         val current = _stateFlow.value
         pushUndoState(current)
 
+        if (NativeEngineBridge.isNativeLoaded) {
+            try {
+                val escaped = title.replace("\\", "\\\\").replace("\"", "\\\"")
+                NativeEngineBridge.nativeExecuteTool("deck", "add_slide", "{\"title\":\"$escaped\"}")
+            } catch (e: Exception) {
+                // native sync
+            }
+        }
+
         val updatedSlides = current.slides.toMutableList()
         val targetIdx = index?.coerceIn(0, updatedSlides.size) ?: updatedSlides.size
         val newSlide = SlideData(
@@ -82,7 +92,6 @@ class DeckEngineAdapterImpl(initialTitle: String = "Untitled Presentation") : De
         )
         updatedSlides.add(targetIdx, newSlide)
 
-        // Re-index slides
         val reindexed = updatedSlides.mapIndexed { idx, s -> s.copy(index = idx) }
 
         _stateFlow.value = current.copy(
@@ -100,7 +109,7 @@ class DeckEngineAdapterImpl(initialTitle: String = "Untitled Presentation") : De
         pushUndoState(current)
 
         if (slideIndex !in current.slides.indices) {
-            return Result.failure(IndexOutOfBoundsException("Slide index $slideIndex out of bounds (total slides: ${current.slides.size})"))
+            return Result.failure(IndexOutOfBoundsException("Slide index $slideIndex out of bounds"))
         }
 
         val updatedSlides = current.slides.toMutableList()
@@ -133,6 +142,17 @@ class DeckEngineAdapterImpl(initialTitle: String = "Untitled Presentation") : De
 
         if (slideIndex !in current.slides.indices) {
             return Result.failure(IndexOutOfBoundsException("Slide index $slideIndex out of bounds"))
+        }
+
+        if (NativeEngineBridge.isNativeLoaded) {
+            try {
+                val escaped = text.replace("\\", "\\\\").replace("\"", "\\\"")
+                val tool = if (type == ShapeType.TEXT_BOX) "add_text_box" else "add_shape"
+                val args = "{\"text\":\"$escaped\",\"x\":$x,\"y\":$y,\"width\":$width,\"height\":$height}"
+                NativeEngineBridge.nativeExecuteTool("deck", tool, args)
+            } catch (e: Exception) {
+                // native sync
+            }
         }
 
         val shape = SlideShape(

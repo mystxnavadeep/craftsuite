@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.Stack
 
 class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEngineAdapter {
@@ -38,8 +40,9 @@ class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEn
         if (NativeEngineBridge.isNativeLoaded) {
             try {
                 NativeEngineBridge.nativeResetSession("word")
+                NativeEngineBridge.nativeExecuteTool("word", "new_document", "{}")
             } catch (e: Exception) {
-                // Log and continue with state sync
+                // Keep local state synchronized
             }
         }
 
@@ -59,10 +62,11 @@ class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEn
 
         if (NativeEngineBridge.isNativeLoaded) {
             try {
-                val args = "{\"text\":\"${text.replace("\"", "\\\"")}\"}"
-                NativeEngineBridge.nativeExecuteTool("word", "word_insert_text", args)
+                val escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                val args = "{\"text\":\"$escaped\"}"
+                NativeEngineBridge.nativeExecuteTool("word", "type_text", args)
             } catch (e: Exception) {
-                // Fallback handles state update
+                // State fallback ensures UI integrity
             }
         }
 
@@ -101,7 +105,15 @@ class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEn
         val current = _stateFlow.value
         pushUndoState(current)
 
-        // For simple replacement, updates the active or last paragraph
+        if (NativeEngineBridge.isNativeLoaded) {
+            try {
+                val escaped = replacementText.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                NativeEngineBridge.nativeExecuteTool("word", "type_text", "{\"text\":\"$escaped\"}")
+            } catch (e: Exception) {
+                // Synchronize
+            }
+        }
+
         val updated = current.paragraphs.toMutableList()
         if (updated.isEmpty()) {
             updated.add(DocumentParagraph(id = "p-1", text = replacementText))
@@ -158,6 +170,19 @@ class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEn
     }
 
     override suspend fun getContent(): Result<String> {
+        if (NativeEngineBridge.isNativeLoaded) {
+            try {
+                val raw = NativeEngineBridge.nativeExecuteTool("word", "get_text", "{}")
+                val parsed = Json.parseToJsonElement(raw).jsonObject
+                val contentArray = parsed["content"]
+                if (contentArray != null) {
+                    val text = contentArray.toString()
+                    return Result.success(text)
+                }
+            } catch (e: Exception) {
+                // Fallback to observable state text
+            }
+        }
         return Result.success(_stateFlow.value.fullText)
     }
 
@@ -192,7 +217,6 @@ class WordEngineAdapterImpl(initialTitle: String = "Untitled Document") : WordEn
             _stateFlow.value = loadedState.copy(isModified = false, canUndo = false, canRedo = false)
             Result.success(Unit)
         } catch (e: Exception) {
-            // If not JSON, treat as plain text document
             val plainText = String(bytes, Charsets.UTF_8)
             val paragraphs = plainText.split("\n").mapIndexed { i, p ->
                 DocumentParagraph(id = "p-$i", text = p)

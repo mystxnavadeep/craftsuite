@@ -7,10 +7,10 @@ use jni::sys::jstring;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
-// Global headless session state for each editor type
-static WORD_SESSION: Mutex<Option<Value>> = Mutex::new(None);
-static GRID_SESSION: Mutex<Option<Value>> = Mutex::new(None);
-static DECK_SESSION: Mutex<Option<Value>> = Mutex::new(None);
+// Global real upstream headless session state for each editor type
+static WORD_SESSION: Mutex<Option<wordcraft_mcp::Headless>> = Mutex::new(None);
+static GRID_SESSION: Mutex<Option<gridcraft_mcp::headless::Headless>> = Mutex::new(None);
+static DECK_SESSION: Mutex<Option<deckcraft_mcp::headless::Headless>> = Mutex::new(None);
 
 fn safe_string(env: &mut JNIEnv, j_str: &JString) -> String {
     match env.get_string(j_str) {
@@ -44,7 +44,7 @@ pub extern "system" fn Java_com_storytold_craftsuite_core_enginebridge_NativeEng
         "word" => execute_word_tool(&tool, &parsed_args),
         "grid" => execute_grid_tool(&tool, &parsed_args),
         "deck" => execute_deck_tool(&tool, &parsed_args),
-        _ => json!({"is_success": false, "error": format!("Unknown engine type: {}", engine)}),
+        _ => json!({"is_error": true, "content": [{"type": "text", "text": format!("Unknown engine type: {}", engine)}]}),
     };
 
     let result_str = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
@@ -59,9 +59,9 @@ pub extern "system" fn Java_com_storytold_craftsuite_core_enginebridge_NativeEng
 ) -> jstring {
     let engine = safe_string(&mut env, &engine_type);
     let tools = match engine.as_str() {
-        "word" => json!(["word_create_document", "word_insert_text", "word_replace_selection", "word_apply_format", "word_get_content", "word_save_document"]),
-        "grid" => json!(["grid_create_workbook", "grid_get_sheets", "grid_read_range", "grid_set_cell", "grid_apply_range", "grid_create_sheet", "grid_save_workbook"]),
-        "deck" => json!(["deck_create_presentation", "deck_get_slides", "deck_create_slide", "deck_update_slide", "deck_reorder_slides", "deck_save_presentation"]),
+        "word" => wordcraft_mcp::tools::tool_definitions(),
+        "grid" => json!(gridcraft_mcp::tools::tool_definitions()),
+        "deck" => json!(deckcraft_mcp::tools::tool_definitions()),
         _ => json!([]),
     };
     let s = serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string());
@@ -78,17 +78,17 @@ pub extern "system" fn Java_com_storytold_craftsuite_core_enginebridge_NativeEng
     match engine.as_str() {
         "word" => {
             if let Ok(mut lock) = WORD_SESSION.lock() {
-                *lock = Some(json!({"title": "Untitled Document", "paragraphs": [""]}));
+                *lock = Some(wordcraft_mcp::Headless::default());
             }
         }
         "grid" => {
             if let Ok(mut lock) = GRID_SESSION.lock() {
-                *lock = Some(json!({"title": "Untitled Workbook", "sheets": {"Sheet1": {}}}));
+                *lock = Some(gridcraft_mcp::headless::Headless::new());
             }
         }
         "deck" => {
             if let Ok(mut lock) = DECK_SESSION.lock() {
-                *lock = Some(json!({"title": "Untitled Presentation", "slides": []}));
+                *lock = Some(deckcraft_mcp::headless::Headless::default());
             }
         }
         _ => {}
@@ -103,46 +103,42 @@ pub extern "system" fn Java_com_storytold_craftsuite_core_enginebridge_NativeEng
     engine_type: JString,
 ) -> jstring {
     let engine = safe_string(&mut env, &engine_type);
-    let info = match engine.as_str() {
-        "word" => json!({"engine": "WordCraft Native Headless", "version": "0.8.0"}),
-        "grid" => json!({"engine": "GridCraft Native Headless", "version": "0.8.0"}),
-        "deck" => json!({"engine": "DeckCraft Native Headless", "version": "0.8.0"}),
+    let result = match engine.as_str() {
+        "word" => execute_word_tool("inspect_document", &json!({})),
+        "grid" => execute_grid_tool("inspect_workbook", &json!({})),
+        "deck" => execute_deck_tool("inspect_document", &json!({})),
         _ => json!({"error": "unknown engine"}),
     };
-    let s = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+    let s = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     create_jstring(&mut env, &s)
 }
 
 fn execute_word_tool(tool: &str, args: &Value) -> Value {
-    match tool {
-        "word_insert_text" => {
-            let text = args.get("text").and_then(Value::as_str).unwrap_or("");
-            json!({"is_success": true, "content": format!("Inserted {} chars", text.len())})
-        }
-        "word_get_content" => {
-            json!({"is_success": true, "content": "Document text from native session"})
-        }
-        _ => json!({"is_success": true, "content": format!("Executed native {}", tool)}),
-    }
+    let mut lock = match WORD_SESSION.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let session = lock.get_or_insert_with(wordcraft_mcp::Headless::default);
+    let tool_res = wordcraft_mcp::tools::call_tool(session, tool, args);
+    tool_res.to_value()
 }
 
 fn execute_grid_tool(tool: &str, args: &Value) -> Value {
-    match tool {
-        "grid_set_cell" => {
-            let cell = args.get("cell").and_then(Value::as_str).unwrap_or("A1");
-            let val = args.get("value").and_then(Value::as_str).unwrap_or("");
-            json!({"is_success": true, "content": format!("Set {} to {}", cell, val)})
-        }
-        _ => json!({"is_success": true, "content": format!("Executed native {}", tool)}),
-    }
+    let mut lock = match GRID_SESSION.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let session = lock.get_or_insert_with(gridcraft_mcp::headless::Headless::new);
+    let tool_res = gridcraft_mcp::tools::call_tool(session, tool, args);
+    tool_res.to_value()
 }
 
 fn execute_deck_tool(tool: &str, args: &Value) -> Value {
-    match tool {
-        "deck_create_slide" => {
-            let title = args.get("title").and_then(Value::as_str).unwrap_or("Slide");
-            json!({"is_success": true, "content": format!("Created slide '{}'", title)})
-        }
-        _ => json!({"is_success": true, "content": format!("Executed native {}", tool)}),
-    }
+    let mut lock = match DECK_SESSION.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let session = lock.get_or_insert_with(deckcraft_mcp::headless::Headless::default);
+    let tool_res = deckcraft_mcp::tools::call_tool(session, tool, args);
+    tool_res.to_value()
 }

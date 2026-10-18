@@ -43,6 +43,7 @@ class GridEngineAdapterImpl(initialTitle: String = "Untitled Workbook") : GridEn
         if (NativeEngineBridge.isNativeLoaded) {
             try {
                 NativeEngineBridge.nativeResetSession("grid")
+                NativeEngineBridge.nativeExecuteTool("grid", "new_workbook", "{}")
             } catch (e: Exception) {
                 // native session fallback
             }
@@ -90,6 +91,17 @@ class GridEngineAdapterImpl(initialTitle: String = "Untitled Workbook") : GridEn
         pushUndoState(current)
 
         val targetCellRef = cellRef.trim().uppercase()
+
+        if (NativeEngineBridge.isNativeLoaded) {
+            try {
+                val escapedVal = value.replace("\\", "\\\\").replace("\"", "\\\"")
+                val args = "{\"sheet_id\":\"$sheetId\",\"cell\":\"$targetCellRef\",\"value\":\"$escapedVal\",\"value_type\":\"${valueType.name.lowercase()}\"}"
+                NativeEngineBridge.nativeExecuteTool("grid", "set_cell", args)
+            } catch (e: Exception) {
+                // State fallback
+            }
+        }
+
         val sheetIndex = current.sheets.indexOfFirst { it.id == sheetId || it.title.equals(sheetId, ignoreCase = true) }
         if (sheetIndex == -1) {
             return Result.failure(IllegalArgumentException("Sheet '$sheetId' not found"))
@@ -98,7 +110,6 @@ class GridEngineAdapterImpl(initialTitle: String = "Untitled Workbook") : GridEn
         val targetSheet = current.sheets[sheetIndex]
         val updatedCells = targetSheet.cells.toMutableMap()
 
-        // Formula or value evaluation
         val displayVal = if (value.startsWith("=")) {
             evaluateFormula(value, updatedCells)
         } else {

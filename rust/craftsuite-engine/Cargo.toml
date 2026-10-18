@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 log = "0.4"
 
-# Upstream engine paths when compiled alongside upstream
-[target.'cfg(not(test))'.dependencies]
-# Dependencies can be linked to upstream workspaces
+# Real upstream engine MCP crates via git
+wordcraft-mcp = { git = "https://github.com/storytold/wordcraft.git", branch = "main" }
+gridcraft-mcp = { git = "https://github.com/storytold/gridcraft.git", branch = "main" }
+deckcraft-mcp = { git = "https://github.com/storytold/deckcraft.git", branch = "main" }
