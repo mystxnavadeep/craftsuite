@@ -35,7 +35,7 @@ class AndroidSafDocumentManager(
 
     override suspend fun readBytes(uri: Uri): FileAccessResult<ByteArray> = withContext(Dispatchers.IO) {
         try {
-            val inputStream: InputStream? = contentResolver.openInputStream(uri)
+            val inputStream = contentResolver.openInputStream(uri)
                 ?: return@withContext FileAccessResult.Error(
                     FileErrorType.FILE_NOT_FOUND,
                     "Unable to open input stream for URI: $uri"
@@ -69,7 +69,7 @@ class AndroidSafDocumentManager(
 
     override suspend fun writeBytes(uri: Uri, bytes: ByteArray): FileAccessResult<Unit> = withContext(Dispatchers.IO) {
         try {
-            val outputStream: OutputStream? = contentResolver.openOutputStream(uri, "wt")
+            val outputStream = contentResolver.openOutputStream(uri, "wt")
                 ?: return@withContext FileAccessResult.Error(
                     FileErrorType.FILE_NOT_FOUND,
                     "Unable to open output stream for URI: $uri"
