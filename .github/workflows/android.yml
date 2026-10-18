@@ -124,25 +124,19 @@ jobs:
             fi
             echo "Found APK: $APK_FILE"
             
-            # Check if apksigner verifies it
-            if ! "$APKSIGNER" verify "$APK_FILE" >/dev/null 2>&1; then
-              echo "APK requires signing. Applying zipalign and apksigner..."
-              "$ZIPALIGN" -p -f 4 "$APK_FILE" "${APK_FILE}.aligned"
-              "$APKSIGNER" sign \
-                --ks "$KEYSTORE_FILE" \
-                --ks-pass "pass:$KEYSTORE_PASSWORD" \
-                --ks-key-alias "$KEY_ALIAS" \
-                --key-pass "pass:$KEY_PASSWORD" \
-                --v1-signing-enabled true \
-                --v2-signing-enabled true \
-                --v3-signing-enabled true \
-                --v4-signing-enabled true \
-                --out "$APK_FILE" \
-                "${APK_FILE}.aligned"
-              rm -f "${APK_FILE}.aligned"
-            else
-              echo "APK is verified signed."
-            fi
+            echo "Applying zipalign and apksigner with explicit v1, v2, and v3 scheme signatures..."
+            "$ZIPALIGN" -p -f 4 "$APK_FILE" "${APK_FILE}.aligned"
+            "$APKSIGNER" sign \
+              --ks "$KEYSTORE_FILE" \
+              --ks-pass "pass:$KEYSTORE_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --out "$APK_FILE" \
+              "${APK_FILE}.aligned"
+            rm -f "${APK_FILE}.aligned"
           done
 
       - name: Validate All APKs (AAPT & APKSIGNER)
@@ -176,11 +170,14 @@ jobs:
             
             # 3. APKSIGNER Signature Verification
             echo "--- APKSIGNER Signature Verification ---"
-            "$APKSIGNER" verify --verbose --print-certs "$APK_FILE"
+            "$APKSIGNER" verify --verbose --print-certs "$APK_FILE" > /tmp/apksigner_out.txt 2>&1
+            cat /tmp/apksigner_out.txt
             if [ $? -ne 0 ]; then
               echo "ERROR: apksigner verification failed for $flavor APK!"
               exit 1
             fi
+            grep -E "Verified using v1 scheme.*true" /tmp/apksigner_out.txt || (echo "ERROR: v1 scheme not verified" && exit 1)
+            grep -E "Verified using v2 scheme.*true" /tmp/apksigner_out.txt || (echo "ERROR: v2 scheme not verified" && exit 1)
             
             # 4. Copy to dist-apks with clear test/production distinction
             cp "$APK_FILE" "dist-apks/CraftSuite-${flavor}-v0.8.1-${SIGNING_TYPE}-signed.apk"
