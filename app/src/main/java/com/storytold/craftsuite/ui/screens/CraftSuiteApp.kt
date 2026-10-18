@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.storytold.craftsuite.core.ai.*
 import com.storytold.craftsuite.core.model.EditorType
 import com.storytold.craftsuite.core.safety.DeferredConfirmationHandler
@@ -27,6 +28,8 @@ fun CraftSuiteApp(
     onOpenDocument: (EditorType, (ByteArray) -> Unit) -> Unit,
     onSaveDocument: (EditorType, ByteArray, () -> Unit) -> Unit
 ) {
+    val coroutineScope = rememberCoroutineScope()
+
     var currentScreen by remember {
         mutableStateOf(
             when (flavorTarget) {
@@ -122,10 +125,9 @@ fun CraftSuiteApp(
                 "word" -> {
                     WordEditorScreen(
                         adapter = wordAdapter,
-                        onOpen = { onOpenDocument(EditorType.WORD) { bytes -> wordAdapter.loadFromBytes(bytes) } },
+                        onOpen = { onOpenDocument(EditorType.WORD) { bytes -> coroutineScope.launch { wordAdapter.loadFromBytes(bytes) } } },
                         onSave = {
-                            val scope = androidx.compose.runtime.rememberCoroutineScope()
-                            scope.launch {
+                            coroutineScope.launch {
                                 wordAdapter.saveToBytes().onSuccess { bytes ->
                                     onSaveDocument(EditorType.WORD, bytes) {}
                                 }
@@ -136,10 +138,9 @@ fun CraftSuiteApp(
                 "grid" -> {
                     GridEditorScreen(
                         adapter = gridAdapter,
-                        onOpen = { onOpenDocument(EditorType.GRID) { bytes -> gridAdapter.loadFromBytes(bytes) } },
+                        onOpen = { onOpenDocument(EditorType.GRID) { bytes -> coroutineScope.launch { gridAdapter.loadFromBytes(bytes) } } },
                         onSave = {
-                            val scope = androidx.compose.runtime.rememberCoroutineScope()
-                            scope.launch {
+                            coroutineScope.launch {
                                 gridAdapter.saveToBytes().onSuccess { bytes ->
                                     onSaveDocument(EditorType.GRID, bytes) {}
                                 }
@@ -150,10 +151,9 @@ fun CraftSuiteApp(
                 "deck" -> {
                     DeckEditorScreen(
                         adapter = deckAdapter,
-                        onOpen = { onOpenDocument(EditorType.DECK) { bytes -> deckAdapter.loadFromBytes(bytes) } },
+                        onOpen = { onOpenDocument(EditorType.DECK) { bytes -> coroutineScope.launch { deckAdapter.loadFromBytes(bytes) } } },
                         onSave = {
-                            val scope = androidx.compose.runtime.rememberCoroutineScope()
-                            scope.launch {
+                            coroutineScope.launch {
                                 deckAdapter.saveToBytes().onSuccess { bytes ->
                                     onSaveDocument(EditorType.DECK, bytes) {}
                                 }

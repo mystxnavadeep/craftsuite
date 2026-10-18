@@ -51,7 +51,7 @@ fun GridEditorScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertizontally,
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
@@ -84,7 +84,7 @@ fun GridEditorScreen(
         Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertizontally
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -207,7 +207,7 @@ fun GridEditorScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(4.dp),
-                verticalAlignment = Alignment.CenterVertizontally
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 LazyRow(
                     modifier = Modifier.weight(1f),
