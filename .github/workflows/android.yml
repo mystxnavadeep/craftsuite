@@ -27,8 +27,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
 
       - name: Setup Rust & Android Native Targets
         uses: dtolnay/rust-toolchain@stable
@@ -38,6 +40,12 @@ jobs:
       - name: Install Cargo NDK
         run: cargo install cargo-ndk || true
 
+      - name: Locate Android NDK
+        run: |
+          NDK_DIR=$(find $ANDROID_HOME/ndk -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
+          echo "Using Android NDK: $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+
       - name: Build Native Rust Engine Bridge (JNI)
         run: |
           mkdir -p app/src/main/jniLibs
@@ -45,32 +53,19 @@ jobs:
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../app/src/main/jniLibs build --release || echo "Native build fallback enabled for cloud test runners"
           cd ../..
 
-      - name: Cache Gradle Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
-
       - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --continue --no-daemon --stacktrace
+        run: gradle testDebugUnitTest --continue --no-daemon --stacktrace
 
       - name: Run Android Lint
-        run: ./gradlew lintDebug --no-daemon || echo "Lint warnings detected; continuing"
+        run: gradle lintDebug --no-daemon || echo "Lint warnings detected; continuing"
 
       - name: Assemble All 3 Standalone APK Targets & Combined Suite
         run: |
-          ./gradlew assembleWordcraftRelease \
-                    assembleGridcraftRelease \
-                    assembleDeckcraftRelease \
-                    assembleSuiteRelease \
-                    --no-daemon --stacktrace
+          gradle assembleWordcraftRelease \
+                 assembleGridcraftRelease \
+                 assembleDeckcraftRelease \
+                 assembleSuiteRelease \
+                 --no-daemon --stacktrace
 
       - name: Verify APK Artifacts Exist
         run: |
