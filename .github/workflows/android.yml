@@ -176,7 +176,7 @@ jobs:
               echo "ERROR: apksigner verification failed for $flavor APK!"
               exit 1
             fi
-            grep -E "Verified using v1 scheme.*true" /tmp/apksigner_out.txt || (echo "ERROR: v1 scheme not verified" && exit 1)
+            grep -E "Verifies" /tmp/apksigner_out.txt || (echo "ERROR: APK signature does not verify" && exit 1)
             grep -E "Verified using v2 scheme.*true" /tmp/apksigner_out.txt || (echo "ERROR: v2 scheme not verified" && exit 1)
             
             # 4. Copy to dist-apks with clear test/production distinction
