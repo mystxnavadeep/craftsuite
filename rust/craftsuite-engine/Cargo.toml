@@ -1,0 +1,20 @@
+[package]
+name = "craftsuite-engine"
+version = "0.8.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Native Android JNI bridge for WordCraft, GridCraft, and DeckCraft headless engines"
+
+[lib]
+name = "craftsuite_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = { version = "0.21", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+log = "0.4"
+
+# Upstream engine paths when compiled alongside upstream
+[target.'cfg(not(test))'.dependencies]
+# Dependencies can be linked to upstream workspaces
