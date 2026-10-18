@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build & Test Native Android Suite
+    name: Build, Sign & Validate Native Android Suite
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -40,11 +40,55 @@ jobs:
       - name: Install Cargo NDK
         run: cargo install cargo-ndk || true
 
-      - name: Locate Android NDK
+      - name: Locate Android NDK & SDK Build Tools
         run: |
           NDK_DIR=$(find $ANDROID_HOME/ndk -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
           echo "Using Android NDK: $NDK_DIR"
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+
+          BUILD_TOOLS_DIR=$(find $ANDROID_HOME/build-tools -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
+          echo "Using Android Build Tools: $BUILD_TOOLS_DIR"
+          echo "APKSIGNER=$BUILD_TOOLS_DIR/apksigner" >> $GITHUB_ENV
+          echo "AAPT=$BUILD_TOOLS_DIR/aapt" >> $GITHUB_ENV
+          echo "ZIPALIGN=$BUILD_TOOLS_DIR/zipalign" >> $GITHUB_ENV
+
+      - name: Prepare Keystore (Production Secret or Test-Signing Fallback)
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Production release keystore detected in secrets."
+            KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            echo "KEYSTORE_FILE=$KEYSTORE_PATH" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+            echo "SIGNING_TYPE=production" >> $GITHUB_ENV
+            echo "signing_type=production" >> $GITHUB_OUTPUT
+          else
+            echo "No production keystore secret configured; generating test-signing keystore for direct device installation."
+            TEST_KEYSTORE="$RUNNER_TEMP/test-release.jks"
+            keytool -genkeypair -v \
+              -keystore "$TEST_KEYSTORE" \
+              -alias "craftsuite-test" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "craftsuite" \
+              -keypass "craftsuite" \
+              -dname "CN=CraftSuite Test, OU=Mobile, O=Storytold, L=San Francisco, ST=CA, C=US"
+            echo "KEYSTORE_FILE=$TEST_KEYSTORE" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=craftsuite" >> $GITHUB_ENV
+            echo "KEY_ALIAS=craftsuite-test" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=craftsuite" >> $GITHUB_ENV
+            echo "SIGNING_TYPE=test" >> $GITHUB_ENV
+            echo "signing_type=test" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build Native Rust Engine Bridge (JNI)
         run: |
@@ -67,44 +111,94 @@ jobs:
                  assembleSuiteRelease \
                  --no-daemon --stacktrace
 
-      - name: Verify APK Artifacts Exist
+      - name: Ensure APK Alignment & Signatures
         run: |
-          echo "Verifying generated APK artifacts..."
-          find app/build/outputs/apk/ -type f -name "*.apk"
+          echo "Processing generated APKs to ensure strict v1/v2/v3 signing..."
+          for flavor in wordcraft gridcraft deckcraft suite; do
+            APK_DIR="app/build/outputs/apk/$flavor/release"
+            echo "Checking flavor $flavor in $APK_DIR..."
+            APK_FILE=$(find "$APK_DIR" -type f -name "*.apk" | head -n 1)
+            if [ -z "$APK_FILE" ]; then
+              echo "Error: No APK found for flavor $flavor"
+              exit 1
+            fi
+            echo "Found APK: $APK_FILE"
+            
+            # Check if apksigner verifies it
+            if ! "$APKSIGNER" verify "$APK_FILE" >/dev/null 2>&1; then
+              echo "APK requires signing. Applying zipalign and apksigner..."
+              "$ZIPALIGN" -p -f 4 "$APK_FILE" "${APK_FILE}.aligned"
+              "$APKSIGNER" sign \
+                --ks "$KEYSTORE_FILE" \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --v1-signing-enabled true \
+                --v2-signing-enabled true \
+                --v3-signing-enabled true \
+                --v4-signing-enabled true \
+                --out "$APK_FILE" \
+                "${APK_FILE}.aligned"
+              rm -f "${APK_FILE}.aligned"
+            else
+              echo "APK is verified signed."
+            fi
+          done
+
+      - name: Validate All APKs (AAPT & APKSIGNER)
+        run: |
+          echo "=== STRICT APK VALIDATION STEP ==="
+          mkdir -p dist-apks
           
-          # Verify each required target exists
-          test -f $(find app/build/outputs/apk/wordcraft/ -name "*.apk" | head -n 1) || (echo "Missing WordCraft APK" && exit 1)
-          test -f $(find app/build/outputs/apk/gridcraft/ -name "*.apk" | head -n 1) || (echo "Missing GridCraft APK" && exit 1)
-          test -f $(find app/build/outputs/apk/deckcraft/ -name "*.apk" | head -n 1) || (echo "Missing DeckCraft APK" && exit 1)
-          test -f $(find app/build/outputs/apk/suite/ -name "*.apk" | head -n 1) || (echo "Missing Suite APK" && exit 1)
-          echo "All expected APK targets verified successfully!"
+          for flavor in wordcraft gridcraft deckcraft suite; do
+            APK_FILE=$(find "app/build/outputs/apk/$flavor/release" -type f -name "*.apk" | head -n 1)
+            echo "=========================================================="
+            echo "Validating target flavor: $flavor"
+            echo "Path: $APK_FILE"
+            
+            # 1. Non-empty & minimum size check (> 5MB)
+            FILE_SIZE=$(wc -c < "$APK_FILE")
+            echo "Size: $FILE_SIZE bytes"
+            if [ "$FILE_SIZE" -lt 5000000 ]; then
+              echo "ERROR: APK is suspiciously small or corrupted (< 5MB): $APK_FILE"
+              exit 1
+            fi
+            
+            # 2. AAPT Badging & Manifest check
+            echo "--- AAPT Badging Dump ---"
+            "$AAPT" dump badging "$APK_FILE" | grep -E "package: name=|sdkVersion:|targetSdkVersion:|application-label:"
+            
+            if [ "$flavor" = "suite" ]; then
+              "$AAPT" dump badging "$APK_FILE" | grep "package: name='com.storytold.craftsuite'" || exit 1
+            else
+              "$AAPT" dump badging "$APK_FILE" | grep "package: name='com.storytold.craftsuite.$flavor'" || exit 1
+            fi
+            
+            # 3. APKSIGNER Signature Verification
+            echo "--- APKSIGNER Signature Verification ---"
+            "$APKSIGNER" verify --verbose --print-certs "$APK_FILE"
+            if [ $? -ne 0 ]; then
+              echo "ERROR: apksigner verification failed for $flavor APK!"
+              exit 1
+            fi
+            
+            # 4. Copy to dist-apks with clear test/production distinction
+            cp "$APK_FILE" "dist-apks/CraftSuite-${flavor}-v0.8.1-${SIGNING_TYPE}-signed.apk"
+            cp "$APK_FILE" "dist-apks/app-${flavor}-release.apk"
+          done
+          
+          echo "--- Generating Checksums ---"
+          cd dist-apks
+          sha256sum *.apk > checksums-sha256.txt
+          cat checksums-sha256.txt
+          cd ..
+          echo "All APKs validated successfully!"
 
-      - name: Upload WordCraft APK
+      - name: Upload Verified Distribution APKs
         uses: actions/upload-artifact@v4
         with:
-          name: WordCraft-Android-Release-APK
-          path: app/build/outputs/apk/wordcraft/*/*.apk
-          retention-days: 14
-
-      - name: Upload GridCraft APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: GridCraft-Android-Release-APK
-          path: app/build/outputs/apk/gridcraft/*/*.apk
-          retention-days: 14
-
-      - name: Upload DeckCraft APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: DeckCraft-Android-Release-APK
-          path: app/build/outputs/apk/deckcraft/*/*.apk
-          retention-days: 14
-
-      - name: Upload CraftSuite Combined APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: CraftSuite-Combined-Release-APK
-          path: app/build/outputs/apk/suite/*/*.apk
+          name: CraftSuite-v0.8.1-Verified-APKs
+          path: dist-apks/*
           retention-days: 14
 
       - name: Upload Test Results
@@ -119,24 +213,40 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         with:
-          tag_name: v0.8.0
-          name: "CraftSuite v0.8.0 Release - Native Android APKs"
+          tag_name: v0.8.1
+          name: "CraftSuite v0.8.1 Release - Signed Native Android APKs"
           body: |
-            ## CraftSuite Native Android Office Suite (v0.8.0)
+            ## CraftSuite Native Android Office Suite (v0.8.1)
             
-            This release provides the four native Android APK packages:
+            ### Fix for Installation Error in v0.8.0
+            In v0.8.0, the APKs were generated without a configured `signingConfig` (`*-release-unsigned.apk`), which Android's Package Manager rejects with `INSTALL_PARSE_FAILED_NO_CERTIFICATES` ("App not installed as package appears to be invalid").
+            
+            In **v0.8.1**, all APKs are zip-aligned and fully signed with valid **v1 (JAR), v2 (APK Signature Scheme v2), and v3 schemes**, verified via `apksigner` and `aapt`.
+            
+            ---
+            
+            ### Installation Instructions:
+            1. Download the desired APK below (e.g. `app-suite-release.apk` or `CraftSuite-suite-v0.8.1-test-signed.apk`).
+            2. Enable **"Install unknown apps"** for your browser or file manager in Android Settings.
+            3. Tap the downloaded APK to install.
+            4. If Google Play Protect shows a prompt (*"Unrecognized app / Unsafe app blocked"*), tap **"More details" -> "Install anyway"**.
+            
+            ---
+            
+            ### Packages Included:
             - **WordCraft Android** (`com.storytold.craftsuite.wordcraft`)
             - **GridCraft Android** (`com.storytold.craftsuite.gridcraft`)
             - **DeckCraft Android** (`com.storytold.craftsuite.deckcraft`)
             - **CraftSuite Combined** (`com.storytold.craftsuite`)
             
-            Built with Kotlin, Jetpack Compose, Headless Rust Engine bridges, and Cloud AI Agent.
+            ---
+            
+            ### Verification:
+            Run `apksigner verify --verbose --print-certs <apk-file>` to verify the signature.
           draft: false
           prerelease: false
           files: |
-            app/build/outputs/apk/wordcraft/*/*.apk
-            app/build/outputs/apk/gridcraft/*/*.apk
-            app/build/outputs/apk/deckcraft/*/*.apk
-            app/build/outputs/apk/suite/*/*.apk
+            dist-apks/*.apk
+            dist-apks/checksums-sha256.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
